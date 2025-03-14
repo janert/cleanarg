@@ -19,7 +19,9 @@ To use this package:
 
 ## Installation
 
-tbd
+```
+go get github.com/janert/cleanarg
+```
 
 
 ## Usage
