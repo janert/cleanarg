@@ -89,7 +89,14 @@ flag is absent, the field is set to its null value; if a fused value is
 present, the field is set to that value.
 
 The special token "--" indicates that all following command-line
-arguments should be treated as positionals.
+arguments should be treated as positionals. If more than one "--"
+is present, the left-most one prevails.
+
+Short flags (like "-a -b -c") may be combined into compound flags
+(like "-abc") on the command-line. All flags, except the last one,
+must be boolean. Compound flags like `-abc` are processed left-to-right;
+as soon as a non-boolean flag is encountered, processing stops, and the
+remaining characters are considered the argument to this non-boolean flag.
 
 
 # Slices, Repeated Arguments, and Trailing Positionals
