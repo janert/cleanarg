@@ -457,7 +457,66 @@ func Test_populateDefaultsErr(t *testing.T) {
 	}
 }
 
-func Test_processTokensUnfused(t *testing.T) {
+func Test_processTokens(t *testing.T) {
+	s := struct {
+		A int `arg-flag:"-a"`
+		B int `arg-flag:"-b" arg-default:"7"`
+		C int
+		P bool `arg-flag:"-p"`
+		Q bool
+	}{}
+
+	v, _ := unwrap(&s)
+	options, _, _ := analyzeStruct(v)
+
+	tests := []struct {
+		toks  []string
+		want  []string
+		rest  []string
+		fused bool
+		err   bool
+	}{
+		{[]string{}, []string{}, []string{}, false, false},
+		{[]string{}, []string{}, []string{}, true, false},
+		{[]string{"--", "-a", "1"},
+			[]string{}, []string{"-a", "1"}, false, false},
+		{[]string{"--", "-a", "1"},
+			[]string{}, []string{"-a", "1"}, true, false},
+	}
+
+	for _, test := range tests {
+		flags, pos, err := processTokens(options, test.toks, test.fused)
+
+		if (err != nil) != test.err {
+			t.Errorf("%v: Unexpected error: %v", test.toks, err)
+		}
+
+		if err != nil {
+			continue
+		}
+
+		if len(flags) != len(test.want) {
+			t.Errorf("%v: Unexpected flags", test.toks)
+		}
+		for i, f := range flags {
+			if f.value != test.want[i] {
+				t.Errorf("%v: got=%s want=%s", test.toks, f.value, test.want[i])
+			}
+		}
+
+		if len(pos) != len(test.rest) {
+			t.Errorf("%v: Unexpected flags", test.toks)
+		}
+		for i, p := range pos {
+			if p != test.rest[i] {
+				t.Errorf("%v: got=%s want=%s", test.toks, p, test.rest[i])
+			}
+		}
+	}
+
+}
+
+func Test_processMaybeFlagsUnfused(t *testing.T) {
 
 	s := struct {
 		A int `arg-flag:"-a"`
@@ -465,6 +524,7 @@ func Test_processTokensUnfused(t *testing.T) {
 		C int
 		P bool `arg-flag:"-p"`
 		Q bool
+		R bool `arg-flag:"-r"`
 	}{}
 
 	v, _ := unwrap(&s)
@@ -486,14 +546,25 @@ func Test_processTokensUnfused(t *testing.T) {
 		{[]string{"-x1"}, []string{}, []string{"-x1"}, false},
 		{[]string{"-x", "-a", "1"}, []string{"1"}, []string{"-x"}, false},
 		{[]string{"-a", "1", "-x"}, []string{"1"}, []string{"-x"}, false},
-		{[]string{"--", "-a", "1"}, []string{}, []string{"-a", "1"}, false},
 		{[]string{"-p"}, []string{""}, []string{}, false},
-		{[]string{"-p1"}, []string{"1"}, []string{}, false},
+		{[]string{"-p1"}, []string{}, []string{}, true},
 		{[]string{"-p", "1"}, []string{""}, []string{"1"}, false},
+		{[]string{"-pr"}, []string{"", ""}, []string{}, false},
+		{[]string{"-rp"}, []string{"", ""}, []string{}, false},
+		{[]string{"-pp"}, []string{"", ""}, []string{}, false},
+		{[]string{"-pa"}, []string{}, []string{}, true},
+		{[]string{"-pa1"}, []string{"", "1"}, []string{}, false},
+		{[]string{"-pa", "1"}, []string{"", "1"}, []string{}, false},
+		{[]string{"-pra1"}, []string{"", "", "1"}, []string{}, false},
+		{[]string{"-pra", "1"}, []string{"", "", "1"}, []string{}, false},
+		{[]string{"-pra1", "2", "3"}, []string{"", "", "1"},
+			[]string{"2", "3"}, false},
+		{[]string{"-par1"}, []string{"", "r1"}, []string{}, false},
+		{[]string{"-par", "1"}, []string{"", "r"}, []string{"1"}, false},
 	}
 
 	for _, test := range tests {
-		flags, pos, err := processTokens(options, test.toks, false)
+		flags, pos, err := processMaybeFlags(test.toks, options, false)
 
 		if (err != nil) != test.err {
 			t.Errorf("%v: Unexpected error: %v", test.toks, err)
@@ -523,7 +594,7 @@ func Test_processTokensUnfused(t *testing.T) {
 	}
 }
 
-func Test_processTokensFused(t *testing.T) {
+func Test_processMaybeFlagsFused(t *testing.T) {
 
 	s := struct {
 		A int `arg-flag:"-a"`
@@ -531,6 +602,7 @@ func Test_processTokensFused(t *testing.T) {
 		C int
 		P bool `arg-flag:"-p"`
 		Q bool
+		R bool `arg-flag:"-r"`
 	}{}
 
 	v, _ := unwrap(&s)
@@ -553,14 +625,25 @@ func Test_processTokensFused(t *testing.T) {
 		{[]string{"-x1"}, []string{}, []string{"-x1"}, false},
 		{[]string{"-x", "-a", "1"}, []string{""}, []string{"-x", "1"}, false},
 		{[]string{"-a", "1", "-x"}, []string{""}, []string{"1", "-x"}, false},
-		{[]string{"--", "-a", "1"}, []string{}, []string{"-a", "1"}, false},
 		{[]string{"-p"}, []string{""}, []string{}, false},
-		{[]string{"-p1"}, []string{"1"}, []string{}, false},
+		{[]string{"-p1"}, []string{}, []string{}, true},
 		{[]string{"-p", "1"}, []string{""}, []string{"1"}, false},
+		{[]string{"-pr"}, []string{"", ""}, []string{}, false},
+		{[]string{"-rp"}, []string{"", ""}, []string{}, false},
+		{[]string{"-pp"}, []string{"", ""}, []string{}, false},
+		{[]string{"-pa"}, []string{"", ""}, []string{}, false},
+		{[]string{"-pa1"}, []string{"", "1"}, []string{}, false},
+		{[]string{"-pa", "1"}, []string{"", ""}, []string{"1"}, false},
+		{[]string{"-pra1"}, []string{"", "", "1"}, []string{}, false},
+		{[]string{"-pra", "1"}, []string{"", "", ""}, []string{"1"}, false},
+		{[]string{"-pra1", "2", "3"}, []string{"", "", "1"},
+			[]string{"2", "3"}, false},
+		{[]string{"-par1"}, []string{"", "r1"}, []string{}, false},
+		{[]string{"-par", "1"}, []string{"", "r"}, []string{"1"}, false},
 	}
 
 	for _, test := range tests {
-		flags, pos, err := processTokens(options, test.toks, true)
+		flags, pos, err := processMaybeFlags(test.toks, options, true)
 
 		if (err != nil) != test.err {
 			t.Errorf("%v: Unexpected error: %v", test.toks, err)
@@ -586,6 +669,41 @@ func Test_processTokensFused(t *testing.T) {
 			if p != test.rest[i] {
 				t.Errorf("%v: got=%s want=%s", test.toks, p, test.rest[i])
 			}
+		}
+	}
+}
+
+func Test_chopToken(t *testing.T) {
+	tests := []struct {
+		token, flag, rest string
+	}{
+		{"", "", ""},
+		{"a", "a", ""},
+		{"a1", "a1", ""},
+		{"a=1", "a=1", ""},
+		{"a-1", "a-1", ""},
+		{"a--1", "a--1", ""},
+		{"--", "--", ""},
+		{"-", "-", ""},
+		{"+", "+", ""},
+		{"--a", "--a", ""},
+		{"--ab", "--ab", ""},
+		{"--a=1", "--a", "1"},
+		{"--ab=1", "--ab", "1"},
+		{"-a", "-a", ""},
+		{"-a1", "-a", "1"},
+		{"-a=1", "-a", "=1"},
+		{"+a", "+a", ""},
+		{"+a1", "+a", "1"},
+		{"+a=1", "+a", "=1"},
+	}
+
+	for _, test := range tests {
+		flag, rest := chopToken(test.token)
+
+		if flag != test.flag || rest != test.rest {
+			t.Errorf("%s: got=%s %s want=%s %s", test.token, flag, rest,
+				test.flag, test.rest)
 		}
 	}
 }

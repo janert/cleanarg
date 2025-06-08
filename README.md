@@ -53,11 +53,12 @@ func main() {
 ### Features
 
 - Supports both short and long flags (eg. `-h` and `--help`)
+- Supports compound flags (eg. `-a -b` may be written as `-ab`)
 - Infers the type of the field and converts command-line tokens automatically
 - Allows to include help text and default values as part of the struct 
   definition
 - Supports repeated arguments
-- Positional arguments do not need to be indicated explicitly
+- Positional arguments do not need to be defined explicitly
 - Positional arguments and flags can be intermixed on the command line
 - Includes pre-formatted help/usage text, and a pre-formatted display of
   the values assigned to the struct
@@ -128,7 +129,15 @@ whitespace (eg. `-c9` or `--counter=9` &mdash; note that long flags names
 require an additional equality sign in this case).
 
 The special token `--` indicates that all following command-line 
-arguments should be treated as positionals.
+arguments should be treated as positionals. (If more than one `--`
+is present in the command-line, the left-most one prevails.)
+
+It is possible to combine _short_ flags on the command-line. In other
+words, the command-line `-a -b -c` may be written as `-abc`. All flags,
+except the last one, must be boolean. Compound flags like `-abc` are
+processed left-to-right; as soon as a non-boolean flag is encountered,
+processing stops, and the remaining characters are considered the argument
+to this non-boolean flag.
 
 
 ### Slices, Repeated Arguments, and Trailing Positionals
@@ -215,13 +224,9 @@ Also remember:
 
 ## Bugs
 
-Likely to change in the future:
-
-- The value supplied to an option must not contain whitespace.
-
-- It is not possible to combine multiple short options into one
-  (ie. `-a -b -c` cannot be written as `-abc`).
-
+- The error reporting, in case the user-supplied command-line cannot 
+  be parsed, could be improved.
+  
 
 ## Why Another One?
 

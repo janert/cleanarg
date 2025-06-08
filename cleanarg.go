@@ -304,6 +304,13 @@ func populateDefaults(options map[string]fieldInfo, v reflect.Value) error {
 	return nil
 }
 
+func processTokens(options map[string]fieldInfo, tokens []string,
+	isFused bool) ([]fieldInfo, []string, error) {
+	// return processTokens1(options, tokens, isFused)
+	// return processTokens2(options, tokens, isFused)
+	return processTokens3(options, tokens, isFused)
+}
+
 // ProcessTokens takes a map of fieldInfo, describing the known flags and a
 // slice of tokens. Returns a slice of fieldInfo containing the recognized,
 // retained options, with the fieldInfo.value being set to the supplied
@@ -314,7 +321,7 @@ func populateDefaults(options map[string]fieldInfo, v reflect.Value) error {
 //
 // In fused mode, if a flag does not have a fused value, the default value
 // for that field is used. No additional token is consumed.
-func processTokens(options map[string]fieldInfo, tokens []string,
+func processTokens1(options map[string]fieldInfo, tokens []string,
 	isFused bool) ([]fieldInfo, []string, error) {
 
 	retainedOptions, positionalTokens := []fieldInfo{}, []string{}
@@ -375,6 +382,70 @@ func processTokens(options map[string]fieldInfo, tokens []string,
 	return retainedOptions, positionalTokens, nil
 }
 
+// An alternative version, which searches for "--" FIRST, thus slightly
+// altering the semantics (to achieve somewhat cleaner code).
+func processTokens2(options map[string]fieldInfo, tokens []string,
+	isFused bool) ([]fieldInfo, []string, error) {
+
+	retainedOptions, positionalTokens := []fieldInfo{}, []string{}
+
+	// Note:
+	// - For options, the "value" to assign is stored in the fieldInfo itself.
+	// - For positionals, the value tokens are kept separate.
+	// Options take zero or one values; in fact, values may be affixed to the
+	// flag. It makes sense to keep flag and value together in fieldInfo.
+	// For positionals, it is not clear which field they will be assigned to
+	// until all tokens have been seen. If a slice is present, assignment of
+	// values to field is even more complicated: done in a separate routine.
+
+	// Check if "--" is present: if so, handle following tokens separately
+	endFlags := len(tokens)
+	for i, token := range tokens {
+		if token == endFlagsIndicator {
+			endFlags = i
+			break
+		}
+	}
+
+	// Handle all tokens that may be flags
+	for i := 0; i < endFlags; i++ {
+		info, ok := lookupFlag(tokens[i], options)
+
+		// Not recognized as flag: treat as positional
+		if !ok {
+			positionalTokens = append(positionalTokens, tokens[i])
+			continue
+		}
+
+		// Token is flag. Finished if boolean or value is not empty:
+		if info.baseType == reflect.TypeOf(true) || info.value != "" {
+			retainedOptions = append(retainedOptions, info)
+			continue
+		}
+
+		// If we get here, flag still needs value. If fused mode, use default
+		if isFused {
+			info.value = info.defaultval
+
+		} else { // otherwise, consume next token (if it exists!)
+			i += 1
+			if len(tokens) > i {
+				info.value = tokens[i]
+			} else {
+				return nil, nil, fmt.Errorf("not enough values")
+			}
+		}
+		retainedOptions = append(retainedOptions, info)
+	}
+
+	// Finally, handle tokens following the "--": all positional
+	for i := endFlags + 1; i < len(tokens); i++ {
+		positionalTokens = append(positionalTokens, tokens[i])
+	}
+
+	return retainedOptions, positionalTokens, nil
+}
+
 // Lookup flag takes a string, which should be a flag from the command line,
 // and a map of fieldInfo entries. Separates flag and value (if present),
 // then looks up and returns fieldInfo for flag in map. Populates the flag
@@ -414,6 +485,173 @@ func lookupFlag(s string, options map[string]fieldInfo) (fieldInfo, bool) {
 
 	// Flag not recognized
 	return fieldInfo{}, false
+}
+
+// **************************************************
+// with processTokens3, both processTokens1/2 AND lookupFlag can go!
+// **************************************************
+
+// ProcessTokens takes a map of fieldInfo, describing the known flags and a
+// slice of tokens. Returns a slice of fieldInfo containing the recognized,
+// retained options, with the fieldInfo.value being set to the supplied
+// value. Tokens that are not flags or flag-values are returned as a slice
+// of strings. The special token "--" indicates that all following tokens
+// should be treated as positionals.
+// Returns an error if there are not enough tokens, or if a compound flag
+// contains an unrecognized flag.
+//
+// In fused mode, if a flag does not have a fused value, the default value
+// for that field is used, and no additional token is consumed.
+//
+// Mainly, processTokens is a wrapper that handles the "--" argument.
+// All the work is done by processMaybeFlags().
+func processTokens3(options map[string]fieldInfo, tokens []string,
+	isFused bool) ([]fieldInfo, []string, error) {
+
+	// Note: Flags and positionals are treated differently.
+	// - For flags, the "value" to assign is stored in the fieldInfo itself.
+	// - For positionals, the value tokens are kept separate.
+	// Options take zero or one values; in fact, values may be affixed to the
+	// flag. It makes sense to keep flag and value together in fieldInfo.
+	// For positionals, it is not clear which field they will be assigned to
+	// until all tokens have been seen. If a slice is present, assignment of
+	// values to field is even more complicated: done in a separate routine.
+
+	// Split tokens on "--" if present: following tokens must be positionals,
+	// handle separately after processing flags
+	endFlags := len(tokens)
+	for i, token := range tokens {
+		if token == endFlagsIndicator {
+			endFlags = i
+			break
+		}
+	}
+
+	// Process those tokens that might be flags (and positionals)
+	flags, positionals, err := processMaybeFlags(tokens[:endFlags],
+		options, isFused)
+
+	// Finally, handle tokens following the "--": all positional
+	for i := endFlags + 1; i < len(tokens); i++ {
+		positionals = append(positionals, tokens[i])
+	}
+
+	return flags, positionals, err
+}
+
+// If the token looks like a flag (ie, has flag prefix), chop the flag part
+// from the rest, and return both; otherwise, return token and empty string.
+func chopToken(s string) (string, string) {
+	switch {
+	case s == "--", s == "-", s == "+":
+		// Not a flag: should not happen
+		return s, ""
+
+	case strings.HasPrefix(s, "--"):
+		flag, rest, _ := strings.Cut(s, "=")
+		return flag, rest
+
+	case strings.HasPrefix(s, "-"), strings.HasPrefix(s, "+"):
+		return s[0:2], s[2:]
+
+	default:
+		// Not a flag
+		return s, ""
+	}
+}
+
+// ProcessMaybeFlags takes a slice of tokens, which may be a mix of flags,
+// their associated values, and positional arguments, and a map of fieldInfo,
+// keyed on the flag. Returns a slice of fieldInfo containing the recognized,
+// retained options, with the fieldInfo.value being set to the supplied
+// value. Tokens that are not flags or flag-values are returned as a slice
+// of strings.
+// Returns an error if there are not enough tokens, or if a compound flag
+// contains an unrecognized flag.
+//
+// In fused mode, if a flag does not have a fused value, the default value
+// for that field is used. No additional token is consumed.
+func processMaybeFlags(tokens []string, options map[string]fieldInfo,
+	isFused bool) ([]fieldInfo, []string, error) {
+
+	flags, positionals := []fieldInfo{}, []string{}
+
+	if len(tokens) == 0 {
+		return flags, positionals, nil
+	}
+
+	isCompound := false
+	for token := ""; len(tokens) > 0 || token != ""; {
+
+		if token == "" {
+			token, tokens = tokens[0], tokens[1:]
+			isCompound = false
+		}
+
+		flag, rest := chopToken(token)
+		info, ok := options[flag]
+
+		// When parsing compound flag, all flags should be recognized
+		if !ok && isCompound {
+			return nil, nil, fmt.Errorf("Unexpected %s in compound flag", token)
+		}
+
+		// Not recognized as flag (known or not); treat as positional
+		if !ok {
+			positionals = append(positionals, token)
+			token = ""
+			continue
+		}
+
+		// Now: flag is a known flag. Is it complete? Is it compound?
+		// Complete: boolean and rest empty OR not boolean and rest not empty
+		//           this means isBoolean and isRestEmpty must be equal!
+		// Compound: boolean and rest not empty
+		// Incomplete: not boolean and rest empty
+
+		// Two variables to make the switch below more readable
+		isFlagBoolean := info.baseType == reflect.TypeOf(true)
+		isRestEmpty := rest == ""
+
+		switch {
+		case isFlagBoolean == isRestEmpty: // Complete
+			info.flag = flag
+			info.value = rest
+			token = ""
+
+		case isFlagBoolean && !isRestEmpty: // Compound
+			// Do NOT discard token; instead use rest to form new token!
+			info.flag = flag
+			info.value = ""
+			token = "-" + rest
+
+			// If compound, then all following flags must be recognized!
+			isCompound = true
+
+		case !isFlagBoolean && isRestEmpty: // Incomplete
+			// If fused, use default value; otherwise use next token
+			info.flag = flag
+
+			if isFused {
+				info.value = info.defaultval
+				token = ""
+			} else {
+				if len(tokens) > 0 {
+					info.value = tokens[0]
+					token, tokens = "", tokens[1:]
+				} else {
+					return nil, nil, fmt.Errorf("not enough tokens: %s", flag)
+				}
+			}
+
+		default:
+			// Cannot happen, because all options are covered!
+		}
+
+		flags = append(flags, info)
+	}
+
+	return flags, positionals, nil
 }
 
 // PopulateField takes a fieldInfo and a reflect.Value, which must
