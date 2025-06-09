@@ -103,7 +103,7 @@ _Remember that struct fields must be public (ie. upper-case) to be
 accessible!_
 
 
-### Permissible Flag Formats
+### Permissible Flag Formats and Command-Line Processing
 
 Both short (single character) and long flags can be used. 
 
